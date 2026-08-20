@@ -7642,7 +7642,7 @@ def generate_media(
             if (video_guide is not None and not skip_video_guide_preprocess) or len(frames_to_inject_parsed) > 0 and not custom_frames_injection or model_def.get("forced_guide_mask_inputs", False):
                 any_mask = video_mask is not None or model_def.get("forced_guide_mask_inputs", False)
                 any_guide_padding = model_def.get("pad_guide_video", False)
-                dont_cat_preguide = extract_guide_from_window_start or model_def.get("dont_cat_preguide", False) or sparse_video_image is not None 
+                dont_cat_preguide = reference_videos or extract_guide_from_window_start or model_def.get("dont_cat_preguide", False) or sparse_video_image is not None
                 from shared.utils.utils import prepare_video_guide_and_mask
                 src_videos, src_masks = prepare_video_guide_and_mask(   [video_guide_processed] + ([] if video_guide_processed2 is None else [video_guide_processed2]), 
                                                                         [video_mask_processed] + ([] if video_guide_processed2 is None else [video_mask_processed2]),

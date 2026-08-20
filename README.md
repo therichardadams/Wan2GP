@@ -125,6 +125,8 @@ Dev and Distilled are available in BF16 and INT8 ConvRot, while Distilled also g
 
 - **Frames Injection in FL2VA:** place several selected images at exact moments in an FL2VA video. Enter frame positions for precise timing or `L` for the end of a sliding-window segment—digital storyboarding without the sticky notes.
 
+- **Hybrid Control Video + Frames Injection:** combine a masked FL2VA control clip with timed source-frame anchors when temporal infill must preserve a person's identity as well as framing and motion. See [MiniMax H3 temporal infill and identity conditioning](docs/H3_TEMPORAL_INFILL.md).
+
 - **Audio Source:** FL2VA can create everything from text, follow an uploaded soundtrack, use a Control Video with its original audio, or keep the video unchanged while composing a new soundtrack. Full-length source audio is preserved in the final file; if it runs out early, H3 takes over instead of serving silence.
 
 - **Spectrum v0.2.1 with offline replay:** H3 Spectrum now captures a clean accelerated trajectory and performs a transformer-free smoothing replay. Video and audio are reconstructed independently for better audio quality.

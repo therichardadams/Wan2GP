@@ -55,6 +55,7 @@ Start and end images are placed at those exact points in the video. For general 
 - **Generate without using a Control Video:** generate normally from the prompt and any start/end images.
 - **Use Control Video:** use an uploaded video to guide the result. Lower **Denoising Strength** values keep the result closer to the control video; `1.0` gives the model full freedom. At `1.0` with **Whole Frame** selected, the control video does not affect the result, so WanGP skips that work. Choose **Masked Area** or **Non Masked Area** to limit editing to part of the frame. **Masking Strength** controls how strongly the rest of the frame stays close to the control video. Use a lower masking strength (<0.75) to facilitate continuity with masked areas.
 - **Inject Frames:** add images at specific points in the generated video. Add the images under **Reference Images**, then enter one position per image in the same order. Position `1` means the first frame; `L` means the last frame of a sliding-window segment.
+- **Use Control Video + Inject Frames:** combine dense control-video layout and motion with exact, time-positioned image anchors. This is useful for temporal infill: the mask leaves room to generate missing motion while injected source frames reinforce the person's identity on both sides of the editable interval. Add images in chronological order and enter one 1-based position per image.
 
 ### Audio Source
 
@@ -319,6 +320,7 @@ class family_handler:
                 "guide_custom_choices": {
                     "choices": [("Generate without using a Control Video", ""),
                                 ("Use Control Video", "GV"),
+                                ("Use Control Video + Inject Frames", "GVKFI"),
                                 ("Inject Frames", "KFI")],
                     "letters_filter": "GVKFI",
                     "default": "",
