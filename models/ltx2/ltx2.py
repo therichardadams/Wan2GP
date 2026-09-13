@@ -12,6 +12,7 @@ import torchaudio
 from accelerate import init_empty_weights
 from safetensors.torch import load_file
 from shared.utils import files_locator as fl
+from shared.utils.phase_progress import generation_progress
 from shared.utils.hdr import VIDEO_PROMPT_HDR_OUTPUT_FLAG, hdr_linear_to_vae_range
 
 from .ltx_core.conditioning import AudioConditionByLatent, AudioConditionByLatentPrefix, AudioConditionByReferenceLatent
@@ -1166,9 +1167,6 @@ class LTX2:
         source = sample.to(dtype=torch.float32)
         source = source.div_(127.5).sub_(1.0) if was_uint8 else source.clamp_(-1.0, 1.0)
         source = source.unsqueeze(0)
-        pad_height, pad_width = (-source_height) % 32, (-source_width) % 32
-        if pad_height or pad_width:
-            source = torch.nn.functional.pad(source, (0, pad_width, 0, pad_height), mode="replicate")
         source = source.to(device=self.device, dtype=torch.bfloat16)
         tiling_config = _build_tiling_config(VAE_tile_size, fps)
         if set_progress_status is not None:
@@ -1292,12 +1290,14 @@ class LTX2:
             _append_system_lora("id", 1.0 if guidance_phases == 1 else "1;0", "id-lora-celebvhq")
         return loras, loras_mult
 
+    @generation_progress
     def generate(
         self,
         input_prompt: str,
         n_prompt: str | None = None,
         image_start=None,
         image_end=None,
+        image_end_frame_position: int | None = None,
         sampling_steps: int = 40,
         guide_scale: float = 4.0,
         alt_guide_scale: float = 1.0,
@@ -1598,7 +1598,7 @@ class LTX2:
             images_stage2.append(entry)
 
         if image_end is not None:
-            entry = (image_end, output_frame_num - 1, input_video_strength)
+            entry = (image_end, output_frame_num - 1 if image_end_frame_position is None else int(image_end_frame_position), input_video_strength)
             guiding_images.append(entry)
             guiding_images_stage2.append(entry)
 

@@ -21,6 +21,7 @@
 *.backup
 *.pkl
 *.html
+!shared/deepy/web/app.html
 !plugins/motion_designer/assets/motion_designer_iframe_template.html
 *.pdf
 *.whl
@@ -43,6 +44,8 @@ ckpts/
 loras/
 loras_i2v/
 tmp/
+deepy_sessions/
+dlss5/
 /settings/
 
 wgp_config.json
