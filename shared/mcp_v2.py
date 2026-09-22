@@ -439,7 +439,8 @@ def register_v2(mcp, session, operations, jobs, policy, get_toolbox, *, download
         return public_media_result(job.snapshot(event_limit=args.get("event_limit", 0)))
 
     generate_def = action_def("Generate image, video or audio from prepared settings, a task wrapping settings in params or settings, a task list or a manifest with tasks. Each generation settings object requires model_type (legacy base_model_type is accepted); edit_* post-processing tasks need no model. Model selection and supplied media inputs are checked before the batch is submitted once, preserving task order and settings. Inputs unsupported by the model or inactive in the selected mode return an error. source may contain @file(\"@workspace/prompt.txt\") in a prompt field: WanGP reads and snapshots that authorized UTF-8 file, preserving blank lines. " + wait_help, {"source": {"anyOf": [{"type": "object"}, {"type": "array", "items": {"type": "object"}, "minItems": 1}]}, **wait_properties}, ("source",))
-    generate_def["_summary"] = 'Generate from prepared settings with arguments={"source":{...settings}}; source also accepts a task list or tasks manifest. Waits for completion by default; read the contract only for additional options.'
+    generate_def["description"] += " Omitted resolution, video_length or duration_seconds, and seed use Deepy's standing defaults before model factory settings. Supplied values, including template values, are preserved."
+    generate_def["_summary"] = 'Generate from prepared settings with arguments={"source":{...settings}}; source also accepts a task list or tasks manifest. Missing dimensions, duration and seed use Deepy defaults. Waits for completion by default; read the contract only for additional options.'
 
     @mcp.tool()
     def wangp_generate(action: str | None = None, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -493,6 +494,11 @@ def register_v2(mcp, session, operations, jobs, policy, get_toolbox, *, download
     session_actions["get_job"]["description"] = "Read the state or result of a generation or post-processing job."
     session_actions["cancel_job"]["description"] = "Request cancellation of a generation or post-processing job."
     session_actions["notify"]["description"] = "Send a notification through configured destinations; notifications are independent of job completion."
+    if not deepy_help:
+        session_actions["list_queue"] = paginated(action_def("List all waiting and running tasks in the connected generation queue, including UI tasks. Returns total_count, queued_count (waiting only), running_count and per-task queue_id for cancel_queue_task. A batch contributes one entry per task; completed tasks are omitted."))
+        session_actions["list_queue"]["example"] = {"action": "list_queue", "arguments": {}}
+        session_actions["cancel_queue_task"] = action_def("Cancel exactly one queue task using queue_id from list_queue. Waiting tasks are removed; running tasks receive an abort request. Other tasks in the batch remain queued. A stale/unknown ID is rejected without cancelling another task.", {"queue_id": {"type": "string", "minLength": 1}}, ["queue_id"])
+        session_actions["cancel_queue_task"]["example"] = {"action": "cancel_queue_task", "arguments": {"queue_id": "<queue_id from list_queue>"}}
 
     @mcp.tool()
     def wangp_session(action: str | None = None, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -500,6 +506,12 @@ def register_v2(mcp, session, operations, jobs, policy, get_toolbox, *, download
         response = invocation(session_actions, action, arguments)
         if response is not None:
             return response
+        if action == "list_queue":
+            snapshot = session.list_queue() if not arguments.get("cursor") else {}
+            tasks = snapshot.pop("tasks", [])
+            return collection({"tool": "session", "action": action}, tasks, arguments, key="tasks", metadata=snapshot)
+        if action == "cancel_queue_task":
+            return session.cancel_queue_task(**arguments)
         return public_media_result(session_operations[action](**arguments))
 
     for tool in mcp._tool_manager.list_tools():

@@ -247,6 +247,16 @@ Important practical limitation:
 
 - only one `Start Image` is supported in this mode
 
+#### Injecting Frames Across Windows
+
+For models with **Inject Frames**, add your images under **Reference Images** and enter comma-separated tokens in **Positions of Injected Frames**:
+
+- A frame number, such as `1`, injects the next image at that position (`1` is the first frame).
+- `L` injects the next image at the end of the next window.
+- `X` skips that window without consuming an image. Repeat it to delay injection for multiple windows.
+
+For example, `L, L, X, L, L` uses four images at the ends of windows 1, 2, 4, and 5. Window 3 has no new frame injection. `L, X, X, L` injects two images at the ends of windows 1 and 4. Lowercase `l` and `x` also work. Enter these tokens in the positions field, not in the text prompt.
+
 #### Optional `[/...]` Window Commands
 
 Sliding-window prompts can include optional slash commands in brackets. WanGP removes these commands before sending the prompt text to the model. Brackets that do not start with `/` are ignored by this parser and remain available for model-specific prompt syntax such as Prompt Relay.
@@ -260,9 +270,12 @@ Generic WanGP window commands:
 - `[/overlap=9]`: use 9 overlap frames for this window, rounded to the model's overlap frame step
 - `[/overlap=0]`: use no overlap frames, when the model supports text-to-video windows
 - `[/new_shot]`: start this window without overlap frames, creating a hard transition, it is an alias for `[/overlap=0]`
+- `[/no_end_image]`: skip this window's End Image without consuming it. The next window without this command uses the next unused End Image. Repeat the command on consecutive window prompts to skip several windows; it takes no value and does not affect Inject Frames or overlap.
 - `[/loras_mult=1;3]`: override the active LoRA multipliers for this window only. The selected LoRAs stay the same; use the same syntax as the LoRAs Multipliers field, such as `[/loras_mult=1;3 0.5;0.5]` for two active LoRAs. Windows without `[/loras_mult=...]` use the normal LoRA multipliers from the UI/default settings.
 
 Use `[/new_shot]` when a window should behave like a hard cut: a new scene, a new character introduction, or the first generated window after Continue Video when the source video should remain in the final output but should not visually condition the new generated window.
+
+For example, with four End Images and five window prompts, add `[/no_end_image]` to the third prompt to use the images in windows 1, 2, 4, and 5. This command applies only to the marked window; automatically added windows use End Images normally.
 
 Multiple commands can be combined in one bracket, for example `[/duration=5s,/overlap=9]`, `[/duration=4s,/new_shot]`, or `[/duration=5s,/loras_mult=1;3]`.
 
@@ -494,6 +507,16 @@ She steps onto the dimly lit stage, spotlight cutting through haze. "Welcome guy
 - Pros: best for strict prompt formats, edits, lyrics, or dialogue where you want manual control
 - Cons: one more step in the workflow
 - Cons: with multiple `Start Image`s, it only works cleanly when `Multiple Images as Texts Prompts` is set to `Match images and text prompts`, and the number of images matches the number of prompt lines
+
+### Images And Window Commands During Enhancement
+
+Local Qwen enhancement can use all Reference Images together with the current Start Image, End Image, and Control Image where supported. You can refer to them in your prompt as `Image reference no 1`, `start image`, `end image`, and `Control Image`. When the first reference is selected as the main image, it is named `Main Ref. Image`; subsequent references keep their numbers. Injected references also have a time label, such as `Image reference no 2 (Frame 2s/15s)`; a reference at the window's endpoint is identified as `end image`. Florence-based enhancers use one image caption per prompt.
+
+When continuing a video, its last retained frame (after source trimming) is available to the enhancer as `start image`. `[/new_shot]` omits this visual anchor.
+
+In Sliding Window prompt modes, write each prompt for that window's references and End Image. The previous window's end image supplies the next start image, unless a new shot is requested. `[/no_end_image]` omits the gallery End Image for that window, leaving it available for the next window. For injected references, `X` skips a window's end-frame slot without consuming a reference, and `L` places a reference at the window's last kept frame, respecting duration changes and tail trimming.
+
+Window commands such as `[/duration=10s]` survive enhancement, and the enhanced action takes the window's duration into account. Commands appear before the enhanced text: on the same line in one-prompt-per-line modes, or on their own line in paragraph and whole-text modes. Edit commands in the visible prompt, outside the `#!PROMPT!:` history line; re-enhancement uses those current commands, including changes or removals.
 
 ### Qwen Backend Choices
 

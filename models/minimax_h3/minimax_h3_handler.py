@@ -13,7 +13,7 @@ from .constants import (H3_AUDIO_REFINEMENT_SETTING, H3_MASK_MODE_DEFAULT, H3_MA
                         h3_grouped_masking_enabled)
 from .dialogue import H3_DIALOGUE_GENERATION, H3_DIALOGUE_MAX_TOTAL_SECONDS, H3_DIALOGUE_PROMPT_INFOS, load_dialogue_whisper
 from .minimax_h3_main import (AUDIO_VAE_FILE, LATENT_UPSCALER_FILE, LATENT_UPSCALER_FOLDER, TEXT_ENCODER_FOLDER,
-                              VIDEO_VAE_FILE, VIDEO_VAE_FP8MIX_FILE)
+                              VIDEO_VAE_FILE, VIDEO_VAE_FP8MIX_FILE, VIDEO_VAE_INT8_FILE)
 from .pdd import PDD_BLOCK_SIZE, PDD_NUM_STEPS
 from .viggle import VIGGLE_ARCHITECTURE, VIGGLE_ASSET_FOLDER, VIGGLE_INFOS, VIGGLE_PROMPT_FILE, VIGGLE_REPO_ID
 from .prompt_enhancer import (FL2VA_DEEPY_PROMPT_INFOS, FL2VA_IMAGE_SYSTEM_PROMPT, FL2VA_PROMPT_INFOS, FL2VA_TEXT_SYSTEM_PROMPT,
@@ -53,7 +53,7 @@ FIRST_BLOCK_CACHE_STRENGTHS = [
 
 FL2VA_DEEPY_INFOS = """Generate video and stereo sound from `prompt`. `image_start` / `image_end` anchor the opening / ending; together they constrain the transition. `video_source` continues an existing video; sliding windows carry overlapping video and audio forward.
 
-Control Video (`video_guide`) guides frames: lower Denoising Strength preserves more source content; Whole Frame at strength 1 gives full freedom. A mask selects the edited area. For motion/appearance references, use Ref2VA Reference Video. Inject Frames uses ordered `image_refs` and explicit positions (`1` = first frame, `L` = last frame of the window).
+Control Video (`video_guide`) guides frames: lower Denoising Strength preserves more source content; Whole Frame at strength 1 gives full freedom. A mask selects the edited area. For motion/appearance references, use Ref2VA Reference Video. Inject Frames uses ordered `image_refs` and explicit positions (`1` = first frame, `L` = last frame of the window, `X` = skip a window without consuming an image).
 
 `audio_prompt_type`: empty = generate video and audio; `A` = condition on `audio_guide`; `K` = control video plus its soundtrack; `2` = keep control frames and generate their audio. A complete input soundtrack is reused; a shorter one permits generated sound afterward. Match visible action and speech to supplied audio.
 
@@ -77,7 +77,7 @@ Start and end images are placed at those exact points in the video. For general 
 
 - **Generate without using a Control Video:** generate normally from the prompt and any start/end images.
 - **Use Control Video:** use an uploaded video to guide the result. Lower **Denoising Strength** values keep the result closer to the control video; `1.0` gives the model full freedom. At `1.0` with **Whole Frame** selected, the control video does not affect the result, so WanGP skips that work. Choose **Masked Area** or **Non Masked Area** to limit editing to part of the frame. **Masking Strength** controls how strongly the rest of the frame stays close to the control video. Use a lower masking strength (<0.75) to facilitate continuity with masked areas.
-- **Inject Frames:** add images at specific points in the generated video. Add the images under **Reference Images**, then enter one position per image in the same order. Position `1` means the first frame; `L` means the last frame of a sliding-window segment.
+- **Inject Frames:** add images at specific points in the generated video. Add the images under **Reference Images**, then enter one position per image in the same order. Position `1` means the first frame; `L` means the last frame of a sliding-window segment. Each `X` skips a window without consuming an image.
 - **Use Control Video + Inject Frames:** combine dense control-video layout and motion with exact, time-positioned image anchors. This is useful for temporal infill: the mask leaves room to generate missing motion while injected source frames reinforce the person's identity on both sides of the editable interval. Add images in chronological order and enter one 1-based position per image.
 
 For motion or appearance transfer from a video reference, use Ref2VA with **Reference Video**. FL2VA Control Video uses denoising-based editing.
@@ -431,6 +431,7 @@ class family_handler:
             **({"accelerated": "native"} if pdd or vdn else {}),
             **({"specialities": [{"name": "character consistency", "aliases": ["identity preservation"]}, {"name": "motion transfer", "description": "Transfer motion or camera from reference videos to image-reference characters."}]} if reference_mode else {}),
             "fps": 24,
+            "prompt_enhancer_video_duration": True,
             "frames_minimum": 107,
             "frames_steps": 17,
             "frames_offset": 5,
@@ -505,7 +506,7 @@ class family_handler:
                 "selection": ["T", "TI"],
                 "labels": {
                     "TV": "An H3 Reference Prompt from Text" if reference_mode else "An H3 Prompt from Text",
-                    "TIV": "An H3 Reference Prompt from Text + First Reference Image" if reference_mode else "An H3 Prompt from Text + Start Image",
+                    "TIV": "An H3 Reference Prompt from Text + {image_inputs}" if reference_mode else "An H3 Prompt from Text + {image_inputs}",
                 },
                 "default": "",
             },
@@ -534,8 +535,10 @@ class family_handler:
             },
             "system_configs2": {
                 "_name": "Video VAE",
-                "_default_label": "Original VAE",
+                "_default_label": "Auto",
+                "bf16": {"name": "BF16", "video_vae_file": VIDEO_VAE_FILE},
                 "fp8mix": {"name": "FP8 Mixed Precision", "video_vae_file": VIDEO_VAE_FP8MIX_FILE},
+                "int8_convrot": {"name": "INT8 ConvRot Decoder", "video_vae_file": VIDEO_VAE_INT8_FILE},
             },
             "system_configs3": {
                 "_name": "DiT Denoising Priority",
@@ -724,7 +727,7 @@ class family_handler:
             video_prompt_type = inputs["video_prompt_type"]
             audio_prompt_type = inputs["audio_prompt_type"]
             if "F" in inputs["video_prompt_type"]:
-                position_count = len((inputs["frames_positions"] or "").replace(",", " ").split())
+                position_count = sum(pos.upper() != "X" for pos in (inputs["frames_positions"] or "").replace(",", " ").split())
                 image_count = len(inputs["image_refs"] or [])
                 if position_count != image_count:
                     return f"MiniMax H3 frame injection requires one position per Reference Image (found {position_count} positions and {image_count} images)"
@@ -817,6 +820,14 @@ class family_handler:
         return None
 
     @staticmethod
+    def resolve_runtime_model_def(model_def, runtime_context):
+        """Resolve Auto once for both asset downloads and model loading."""
+        if "video_vae_file" in model_def or model_def.get("system_configs2", {}).get("_name") != "Video VAE":
+            return model_def
+        filename = {"int8": VIDEO_VAE_INT8_FILE, "fp8": VIDEO_VAE_FP8MIX_FILE}.get(runtime_context["transformer_quantization"], VIDEO_VAE_FILE)
+        return {**model_def, "video_vae_file": filename}
+
+    @staticmethod
     def query_model_files(computeList, base_model_type, model_def=None):
         source_folders = []
         file_lists = []
@@ -824,6 +835,9 @@ class family_handler:
         video_vae_file = model_def.get("video_vae_file", VIDEO_VAE_FILE)
         if video_vae_file in (VIDEO_VAE_FILE, VIDEO_VAE_FP8MIX_FILE):
             vae_files.append(video_vae_file)
+        if video_vae_file == VIDEO_VAE_INT8_FILE:
+            source_folders.append("minimax_h3")
+            file_lists.append([VIDEO_VAE_INT8_FILE.rsplit("/", 1)[-1]])
         if "audio_vae_file" not in model_def:
             vae_files.append(AUDIO_VAE_FILE)
         if vae_files:

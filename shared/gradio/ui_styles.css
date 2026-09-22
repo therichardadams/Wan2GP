@@ -2,8 +2,70 @@
     --wangp-ui-scale: 0.9;
 }
 
+/* Form refreshes change control heights; keep the page at the user's position. */
+html {
+    overflow-anchor: none;
+}
+
 gradio-app {
     width: 100%;
+}
+
+.gallery-container .icon-button-wrapper.wangp-video-actions {
+    position: absolute;
+    right: auto;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+    flex-direction: column;
+    gap: 0;
+    font-size: 13px;
+}
+/* Gradio also sets overflow on its outer block. Keep focus on the frame
+   icons from scrolling that wrapper and clipping the fullscreen control. */
+.block:has(.wangp-video-actions) {
+    overflow: clip !important;
+}
+.wangp-video-actions button[hidden],
+.wangp-video-actions [role="status"]:empty {
+    display: none;
+}
+.wangp-video-actions [role="status"]:not(:empty) {
+    position: absolute;
+    right: 32px;
+    top: 0;
+    width: 230px;
+    padding: 8px 10px;
+    color: var(--body-text-color);
+    background: var(--background-fill-primary);
+    border: 1px solid var(--border-color-primary);
+    border-radius: 4px;
+}
+
+/* Hide the preview-close toggle; reference galleries have explicit clear controls. */
+.gallery-container > .preview button[aria-label="Close"] {
+    display: none;
+}
+
+/* The preview has its own thumbnail strip; no background grid or blur layer. */
+.gallery-container > .preview {
+    background: var(--background-fill-primary);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+}
+/* The outer wrapper must not scroll when Chrome reveals a focused thumbnail. */
+.block:has(> .gallery-container) {
+    overflow: clip;
+}
+
+/* Chrome puts its buffering spinner beside the public controls enclosures.
+   Hide that inherited layer, then restore both enclosures so the native
+   playback, timeline, volume and fullscreen controls remain available. */
+.gallery-container video[data-testid="detailed-video"]::-webkit-media-controls {
+    visibility: hidden;
+}
+.gallery-container video[data-testid="detailed-video"]::-webkit-media-controls-enclosure,
+.gallery-container video[data-testid="detailed-video"]::-webkit-media-controls-overlay-enclosure {
+    visibility: visible;
 }
 
 .wangp-voice-prompt textarea:disabled {
@@ -312,7 +374,6 @@ h2 {
 }
 
 .wangp-generation-info {color:var(--body-text-color);font-size:var(--text-md);line-height:1.55;}
-.wangp-generation-info .generation-summary {margin-bottom:10px;overflow-wrap:anywhere;}
 .wangp-generation-info .generation-table-wrap {max-width:100%;overflow-x:auto;border:1px solid var(--border-color-primary);border-radius:var(--block-radius,8px);background:var(--background-fill-primary);}
 .wangp-generation-info #PINFO {width:100%;margin:0;border:0;border-collapse:separate;border-spacing:0;table-layout:auto;color:inherit;font:inherit;}
 .wangp-generation-info #PINFO td {padding:12px 5px;border:0;vertical-align:middle;}
@@ -381,6 +442,10 @@ transition: visibility 0s linear 1s, opacity 0.3s linear 1s; /* 1s delay before 
 .btn_centered {margin-top: calc(10px * var(--wangp-ui-scale)); text-wrap-mode: nowrap;}
 .cbx_centered label {margin-top: calc(8px * var(--wangp-ui-scale)); text-wrap-mode: nowrap;}
 .cbx_bottom label {padding-top: calc(48px * var(--wangp-ui-scale)); text-wrap-mode: nowrap;}
+/* Reserve the LoRA multiplier's actual width instead of a fixed 1% column. */
+#video_info table {
+    table-layout: auto !important;
+}
 .copy-swap {
 display: block;
 max-width: 100%;
@@ -415,6 +480,26 @@ overflow-wrap: anywhere;
 user-select: text;
 }
 .compact_text {padding: calc(1px * var(--wangp-ui-scale))}
+/* Keep the compact settings label beside the prompt without shrinking the drop target. */
+.wangp-settings-upload > button[aria-dropeffect] {
+    padding-left: 50%;
+}
+.wangp-settings-upload > button[aria-dropeffect] > .wrap {
+    margin-inline: 0;
+    max-width: 100%;
+    white-space: nowrap;
+}
+.wangp-settings-upload > label.float {
+    display: block;
+    max-width: calc(50% - var(--block-label-margin));
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.wangp-settings-upload > label.float > span {
+    display: inline-block;
+    vertical-align: middle;
+}
 #video_input .video-container .container {
     flex-direction: row !important;
     display: flex !important;
@@ -455,6 +540,12 @@ user-select: text;
 .header-markdown-group .prose {
     margin-top: 0 !important;
     margin-bottom: 0 !important;
+}
+/* Keep the description and attention line steady while callbacks are pending. */
+.header-markdown-group div.html-container,
+.header-markdown-group div:has(> [data-testid="markdown"]) {
+    opacity: 1;
+    transition: none;
 }
 
 .wangp-transparent-group,

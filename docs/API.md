@@ -360,46 +360,26 @@ Useful `GeneratedArtifact` fields:
   - Sampling rate associated with `artifact.audio_tensor` when present.
 - `artifact.fps`
   - Output FPS associated with `artifact.video_tensor_uint8` when present.
+- `artifact.side_files`
+  - Companion filenames mapped to their file contents as `bytes`, such as `{"song.abc": b"...", "song.mid": b"..."}`. Python session calls return these in memory by default, while the main media is still saved for the gallery. Set `_api={"return_side_files": False}` to save the companions beside the media instead. They are not separate gallery entries.
+
+For YuE2, set `custom_settings={"save_score": 1}` to export both the ABC and MIDI composition. This works with automatic planning, a supplied score or source-audio scoring; direct generation has no score. These describe the composition used to generate the song, not an exact transcription of the finished audio. Wan Alpha returns its transparent PNG-frame ZIP through the same `side_files` field.
+
+To supply a YuE2 score, set `custom_guide` to the path of a UTF-8 `.abc` file and use `audio_prompt_type=""` with composition mode 0 or 1. Source-audio scoring (`audio_prompt_type="A"`) hides and ignores this optional file. The former pasted `custom_settings.abc` value is ignored; upload a file instead.
+
+```python
+for artifact in result.artifacts:
+    for filename, content in artifact.side_files.items():
+        (Path("my_exports") / filename).write_bytes(content)
+```
+
+Create the destination directory before writing. Companion names follow the final media filename, including any suffix WanGP adds to avoid overwriting an existing output.
 
 ## MCP Server
 
 ### MCP authentication and HTTPS
 
-Network MCP supports optional OAuth 2.1 authorization, separate from the Gradio/Deepy browser login. Use it when external MCP clients can reach WanGP over an untrusted network. Local `stdio` connections do not use OAuth. Keep an unauthenticated network MCP server restricted to localhost or a trusted VPN.
-
-Update the project dependencies first with `python -m pip install -r requirements.txt`. The network authentication uses the maintained MCP 1.x SDK; the MCP protocol version is independent of WanGP's API v1/v2 tool selection.
-
-For direct HTTPS with a generated MCP approval passphrase:
-
-```powershell
-python wgp.py --mcp --mcp-transport streamable-http --mcp-host 0.0.0.0 --mcp-port 7866 --mcp-auth --mcp-auth-url https://wangp.example.com:7866 --ssl-certfile C:\certs\wangp.pem --ssl-keyfile C:\certs\wangp-key.pem
-```
-
-Connect your OAuth-capable MCP client to `https://wangp.example.com:7866/mcp`. `--mcp-auth-url` is the externally reachable **origin**, including a non-default port, without `/mcp`, other paths or query parameters. The certificate must cover that hostname and be trusted by the client. HTTPS is required for non-loopback OAuth origins.
-
-The client discovers authorization settings, registers, then opens the **Authorize MCP Access** page. Check the client name and callback address, and enter the separate MCP passphrase printed at startup only if you initiated the connection. Approval gives that client access to the WanGP tools and media permitted by the server's configuration. The shared `wangp` scope is full server access, not a read-only or per-tool permission. OAuth does not expand filesystem permissions: the existing `--mcp-allow-read-file-system` option remains separate.
-
-Use `--mcp-auth-password "your separate long passphrase"` with `--mcp-auth` for a fixed passphrase, or set `WANGP_MCP_AUTH_PASSWORD` in the launch environment. An explicit CLI passphrase takes precedence. Generated passphrases change at restart; supplied passphrases are not printed. Web `--auth` passwords and browser sessions do not authorize MCP requests.
-
-For an HTTPS reverse proxy on the same PC:
-
-```powershell
-python wgp.py --mcp --mcp-transport streamable-http --mcp-host 127.0.0.1 --mcp-port 7866 --mcp-auth --mcp-auth-url https://wangp.example.com
-```
-
-The proxy handles the certificate. Forward the whole origin, including authorization and discovery endpoints, preserve the original Host header, and forward the correct scheme. Keep the backend private. Hosting under a URL subpath is not supported. For local development only, an origin such as `http://127.0.0.1:7866` is accepted without a certificate.
-
-The same certificate flags work with `python -m shared.mcp_server`; use that entry point's `--transport`, `--host` and `--port` names. `--https-port` optionally adds HTTPS while redirecting the main HTTP port. Legacy SSE transport uses `/sse` and the same OAuth protection; Streamable HTTP is recommended for new client connections.
-
-Client requirements and session behavior:
-
-- Authorization-code flow with S256 PKCE, authorization-server and protected-resource discovery, and dynamic client registration are supported. Registration accepts public clients and clients using `client_secret_post` or `client_secret_basic`. Redirects must use HTTPS or loopback HTTP. URL-based client metadata documents and private-key client authentication are not supported.
-- Clients send the issued access token in `Authorization: Bearer ...` on **every** MCP request and direct media upload/download. Never put a token or passphrase in a URL. A browser login cookie or the passphrase itself is not a bearer token.
-- Authorization approvals expire after ten minutes and issued codes after two minutes. Access tokens expire after one hour. Refresh tokens rotate and expire at most seven days after the original approval. Reusing an old refresh token revokes that approval; reconnect the client. Clients can also revoke tokens through the advertised revocation endpoint.
-- Server restart invalidates registered clients, approvals and tokens, even with a fixed passphrase. Reconnect or remove and re-add the server in clients that retain stale registration details. Unapproved registrations expire after ten minutes; approved registrations expire after 30 days.
-- MCP password checks use the same [progressive delay rules](DEEPY.md#protect-network-access) as the web login, with a separate global counter. Existing authorized clients continue working during a login cooldown. Only one MCP password check runs at a time.
-
-For NAT port forwarding, expose only trusted HTTPS with authentication enabled. See [HTTPS setup](DEEPY.md#set-up-https) for certificate and VPN guidance.
+See [MCP Authentication and HTTPS](AUTHENTICATION.md#mcp-authentication-and-https) for OAuth setup, passphrases, client approval, token lifetimes, certificates, and reverse proxy hosting. MCP authorization is separate from the Gradio/Deepy browser login.
 
 ### MCP API v2 and migration
 
@@ -440,7 +420,7 @@ In Deepy Prime's in-process model definitions, optional `deepy_infos` and `deepy
 | Post-processing | `wangp_postprocess` / discovered processor ID |
 | Media utilities / previous generation settings | `wangp_toolbox` / discovered action or `media_settings` |
 | File navigation, search, text edits, archives | `wangp_io` / `list`, `rg`, `read_text`, `info`, `edit`, `append_text`, `write_text`, etc. |
-| Jobs, notifications, HTTP Gallery transfers | `wangp_session` / `get_job`, `cancel_job`, `notify`, `create_gallery_upload`, `create_gallery_download` |
+| Jobs, notifications, HTTP Gallery transfers | `wangp_session` / `get_job`, `cancel_job`, `list_queue`, `cancel_queue_task`, `notify`, `create_gallery_upload`, `create_gallery_download` (`list_queue` and `cancel_queue_task` are external-only) |
 | Documentation | Standard MCP resources; Prime exposes `mcp_resource` |
 
 Example v2 calls:
@@ -876,6 +856,39 @@ Example:
 ```python
 job = session.submit(Path(r"C:\WanGP\my_queue.zip"))
 ```
+
+## Inspecting and Cancelling Queue Tasks
+
+The Python API can list the connected session's entire generation queue, including tasks added through the WebUI when the session is bound to its live `webui_state`:
+
+```python
+queue = session.list_queue()
+print(queue["queued_count"])   # Waiting tasks, excluding the running task.
+print(queue["running_count"])  # Includes a running task that is being cancelled.
+for task in queue["tasks"]:
+    print(task["queue_id"], task["status"], task["model_type"], task["prompt"])
+
+# Use the queue_id of the specific task you want to cancel.
+session.cancel_queue_task(queue_id)
+```
+
+The result contains `total_count`, `queued_count`, `running_count`, and `tasks` in queue order. Each task includes an opaque `queue_id`, one-based `position`, original `task_id`, optional `client_id` (empty for ordinary UI tasks), `model_type`, a prompt preview of up to 320 characters, and `status`: `queued`, `running`, or `cancelling`. Completed tasks are omitted. Counts are per queue task, not per output image, repeat, or batch submission.
+
+Cancelling a waiting task removes it immediately and returns `status="cancelled"`. Cancelling a running task requests its normal abort and returns `status="cancelling"`; poll a fresh list until it disappears. Other tasks in the batch remain queued. Cancelling an unknown or finished ID raises an error without aborting another task. Use the returned `queue_id`, not the displayed numeric `task_id`, which can be reused when a new queue is loaded.
+
+External **MCP v2** exposes the same operations through `wangp_session`:
+
+```python
+wangp_session(action="list_queue", arguments={})
+wangp_session(action="list_queue", arguments={"summary_only": True})
+wangp_session(action="cancel_queue_task", arguments={"queue_id": "<queue_id from list_queue>"})
+```
+
+MCP lists use the standard `limit` / `cursor` pagination. `count` is the number of tasks on that page; the three queue counts cover the entire snapshot. Continuations preserve that snapshot. Omit `cursor` to get current counts after a cancellation or completion. `summary_only=true` returns counts without task details.
+
+These two MCP actions are **not exposed to Deepy** or MCP v1. Existing `get_job` / `cancel_job` continue to operate on a submitted MCP job, which can contain multiple queue tasks; `cancel_queue_task` targets just one of those tasks.
+
+Queue access is scoped to the connected session, not every WanGP process on the machine. A standalone MCP server owns its headless session and does not inspect a separately running WebUI. A WebUI-bound Python API reads that UI's admitted generation queue; submissions still waiting for UI admission are not yet queue entries. HTTP MCP clients call these tools through `/mcp`; there is no separate REST queue route.
 
 ## Streaming Events
 

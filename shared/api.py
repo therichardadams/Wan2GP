@@ -16,6 +16,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -215,6 +216,7 @@ class GeneratedArtifact:
     audio_sampling_rate: int | None = None
     fps: float | None = None
     flashvsr_continue_cache: Any = None
+    side_files: dict[str, bytes] = field(default_factory=dict)
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any], *, default_client_id: str = "") -> "GeneratedArtifact | None":
@@ -231,6 +233,7 @@ class GeneratedArtifact:
             audio_sampling_rate=payload.get("audio_sampling_rate"),
             fps=payload.get("fps"),
             flashvsr_continue_cache=payload.get("flashvsr_continue_cache"),
+            side_files=payload.get("side_files", {}),
         )
 
 
@@ -314,7 +317,7 @@ def _coerce_api_audio_tensor(output_audio_data: Any) -> Any:
     return None if output_audio_data is None else np.asarray(output_audio_data, dtype=np.float32)
 
 
-def build_api_output_artifact_payload(client_id: str, video_path: Any, media_type: str, output_video_frames: Any, output_audio_data: Any, output_audio_sampling_rate: Any, output_fps: Any, *, hdr: bool = False, flashvsr_continue_cache: Any = None) -> dict[str, Any] | None:
+def build_api_output_artifact_payload(client_id: str, video_path: Any, media_type: str, output_video_frames: Any, output_audio_data: Any, output_audio_sampling_rate: Any, output_fps: Any, *, hdr: bool = False, flashvsr_continue_cache: Any = None, side_files: dict[str, bytes] | None = None) -> dict[str, Any] | None:
     client_id = str(client_id or "").strip()
     if len(client_id) == 0:
         return None
@@ -330,11 +333,12 @@ def build_api_output_artifact_payload(client_id: str, video_path: Any, media_typ
         "audio_sampling_rate": int(output_audio_sampling_rate) if output_audio_sampling_rate else None,
         "fps": float(output_fps) if output_fps else None,
         "flashvsr_continue_cache": flashvsr_continue_cache,
+        "side_files": side_files if side_files is not None else {},
     }
 
 
-def store_api_output_artifact(gen: dict[str, Any], client_id: str, video_path: Any, media_type: str, output_video_frames: Any, output_audio_data: Any, output_audio_sampling_rate: Any, output_fps: Any, *, hdr: bool = False, flashvsr_continue_cache: Any = None) -> bool:
-    payload = build_api_output_artifact_payload(client_id, video_path, media_type, output_video_frames, output_audio_data, output_audio_sampling_rate, output_fps, hdr=hdr, flashvsr_continue_cache=flashvsr_continue_cache)
+def store_api_output_artifact(gen: dict[str, Any], client_id: str, video_path: Any, media_type: str, output_video_frames: Any, output_audio_data: Any, output_audio_sampling_rate: Any, output_fps: Any, *, hdr: bool = False, flashvsr_continue_cache: Any = None, side_files: dict[str, bytes] | None = None) -> bool:
+    payload = build_api_output_artifact_payload(client_id, video_path, media_type, output_video_frames, output_audio_data, output_audio_sampling_rate, output_fps, hdr=hdr, flashvsr_continue_cache=flashvsr_continue_cache, side_files=side_files)
     if payload is None:
         return False
     gen.setdefault("api_output_artifacts", {})[payload["client_id"]] = payload
@@ -858,6 +862,55 @@ class WanGPSession:
         if job is not None:
             job.cancel()
 
+    def _queue_lock(self):
+        return self._ensure_runtime().module.lock if self._use_webui_queue else self._job_lock
+
+    def list_queue(self) -> dict[str, Any]:
+        """List all pending/running tasks in this session's generation queue, including UI tasks."""
+        gen = self._state["gen"]
+        with self._queue_lock():
+            entries = []
+            for index, task in enumerate(gen.get("queue", [])):
+                queue_id = task.setdefault("_api_queue_id", uuid.uuid4().hex)
+                params = self._get_task_settings(task)
+                running = gen.get("api_active_queue_task") is task
+                cancelling = running and bool(gen.get("abort", False))
+                entries.append({
+                    "queue_id": queue_id, "position": index + 1, "task_id": task.get("id"),
+                    "client_id": str(params.get("client_id", "") or ""),
+                    "model_type": str(params.get("model_type", "") or ""),
+                    "prompt": str(params.get("prompt", "") or "")[:320],
+                    "status": "cancelling" if cancelling else "running" if running else "queued",
+                })
+            running_count = sum(entry["status"] != "queued" for entry in entries)
+            return {"tasks": entries, "total_count": len(entries), "queued_count": len(entries) - running_count, "running_count": running_count}
+
+    def cancel_queue_task(self, queue_id: str) -> dict[str, Any]:
+        """Cancel one task identified by list_queue(), leaving the rest of its batch queued."""
+        if not isinstance(queue_id, str) or not queue_id.strip():
+            raise ValueError("queue_id must be a non-empty ID returned by list_queue().")
+        gen = self._state["gen"]
+        with self._queue_lock():
+            queue = gen.get("queue", [])
+            index = next((i for i, task in enumerate(queue) if task.get("_api_queue_id") == queue_id), None)
+            if index is None:
+                raise KeyError(f"Unknown or finished queue_id: {queue_id}")
+            task = queue[index]
+            task["_api_queue_cancel_requested"] = True
+            running = gen.get("api_active_queue_task") is task
+            if running:
+                self._request_cancel_unlocked(self._ensure_runtime().module)
+            else:
+                del queue[index]
+                if self._use_webui_queue:
+                    wgp = self._ensure_runtime().module
+                    wgp.record_queue_error(self._state, [task], "Generation was cancelled", abort=True)
+                    if "prompts_max" in gen:
+                        gen["prompts_max"] = max(0, gen["prompts_max"] - 1)
+                    # The UI autosave mirrors the live queue under the same lock.
+                    wgp.global_queue_ref = queue[:]
+            return {"queue_id": queue_id, "status": "cancelling" if running else "cancelled"}
+
     @property
     def active_job(self) -> SessionJob | None:
         with self._job_lock:
@@ -909,6 +962,8 @@ class WanGPSession:
             )
             job._bind_thread(thread)
             self._active_job = job
+            if not self._use_webui_queue:
+                self._state["gen"]["queue"] = prepared_tasks[:]
             thread.start()
             return job
 
@@ -940,6 +995,7 @@ class WanGPSession:
             elif "priority" in params and not params["priority"]:
                 params.pop("priority", None)
             task["params"] = params
+            task.setdefault("plugin_data", {}).setdefault("api", {}).setdefault("return_side_files", True)
             client_ids.append(client_id)
         return tuple(client_ids)
 
@@ -1080,7 +1136,6 @@ class WanGPSession:
 
     def _prepare_state_for_run(self, tasks: list[dict[str, Any]]) -> None:
         gen = self._state["gen"]
-        gen["queue"] = tasks
         set_main_generation_running(self._state, True)
         gen["process_status"] = "process:main"
         gen["progress_status"] = ""
@@ -1096,7 +1151,9 @@ class WanGPSession:
 
     def _reset_state_after_run(self) -> None:
         gen = self._state["gen"]
-        gen["queue"] = []
+        with self._job_lock:
+            gen["queue"] = []
+            gen.pop("api_active_queue_task", None)
         set_main_generation_running(self._state, False)
         gen["process_status"] = "process:main"
         gen["progress_status"] = ""
